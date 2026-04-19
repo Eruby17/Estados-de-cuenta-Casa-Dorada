@@ -31,29 +31,25 @@ tipo_cambio = st.sidebar.number_input("Tipo de Cambio (1 USD = ? MXN)", min_valu
 # --- 2. FUNCIÓN PARA FORMATEAR FECHA ---
 def formatear_fecha_ingles(fecha_str):
     try:
-        # Convierte '20260315' a objeto fecha y luego a 'Mar 15, 2026'
         fecha_obj = datetime.strptime(fecha_str, '%Y%m%d')
         return fecha_obj.strftime('%b %d, %Y')
     except:
-        return fecha_str # Si falla, devuelve el original
+        return fecha_str 
 
 # --- 3. FUNCIÓN GENERADORA DE PDF ---
 def crear_pdf_recibo(df, tc, total_mxn, total_usd, guest, room, folio):
     pdf = FPDF()
     pdf.add_page()
     
-    # Logo
     if os.path.exists("logo.png"):
         pdf.image("logo.png", 10, 10, 85)
         pdf.ln(35)
     else:
         pdf.set_font("Arial", "B", 20); pdf.cell(0, 10, "CASA DORADA RESORT & SPA", ln=True); pdf.ln(15)
 
-    # Info Hotel
     pdf.set_font("Arial", "", 9); pdf.set_xy(120, 12)
     pdf.multi_cell(80, 4, "Cabo San Lucas, B.C.S., Mexico\nPhone: +52 (624) 163 5700\nwww.casadorada.com", align="R")
     
-    # Datos Huésped
     pdf.set_xy(10, 55); pdf.set_font("Arial", "B", 10)
     pdf.cell(15, 6, "Guest:", 0, 0); pdf.set_font("Arial", "", 10); pdf.cell(90, 6, guest.upper(), 0, 1)
     pdf.set_font("Arial", "B", 10); pdf.cell(15, 6, "Room:", 0, 0); pdf.set_font("Arial", "", 10); pdf.cell(30, 6, str(room), 0, 0)
@@ -63,9 +59,8 @@ def crear_pdf_recibo(df, tc, total_mxn, total_usd, guest, room, folio):
     pdf.set_font("Arial", "", 10); pdf.cell(0, 5, f"Applied Rate: $1.00 USD = {tc} MXN", ln=True, align="C")
     pdf.ln(8)
     
-    # Tabla
     pdf.set_fill_color(33, 47, 61); pdf.set_text_color(255, 255, 255); pdf.set_font("Arial", "B", 9)
-    pdf.cell(30, 9, " DATE", 1, 0, "L", True) # Un poco más ancho para la fecha en letra
+    pdf.cell(30, 9, " DATE", 1, 0, "L", True)
     pdf.cell(80, 9, " DESCRIPTION", 1, 0, "L", True)
     pdf.cell(40, 9, " AMOUNT (MXN)", 1, 0, "R", True)
     pdf.cell(40, 9, " EQUIV. (USD)", 1, 1, "R", True)
@@ -83,7 +78,6 @@ def crear_pdf_recibo(df, tc, total_mxn, total_usd, guest, room, folio):
         pdf.cell(40, 8, f"$ {abs(row['Monto MXN']):,.2f} ", 1, 0, "R", fill)
         pdf.cell(40, 8, f"$ {abs(row['Equivalente USD']):,.2f} ", 1, 1, "R", fill)
     
-    # Totales
     pdf.ln(8); pdf.set_text_color(0, 0, 0); pdf.set_font("Arial", "B", 12)
     pdf.cell(110, 10, "", 0, 0); pdf.cell(40, 10, "TOTAL BILL (MXN):", 0, 0, "R"); pdf.cell(40, 10, f"$ {total_mxn:,.2f}", 1, 1, "R")
     pdf.set_fill_color(240, 240, 240); pdf.cell(110, 12, "", 0, 0); pdf.cell(40, 12, "TOTAL BILL (USD):", 0, 0, "R"); pdf.cell(40, 12, f"$ {total_usd:,.2f}", 1, 1, "R", True)
@@ -96,6 +90,7 @@ archivo_pdf = st.file_uploader("Subir Estado de Cuenta (PDF)", type=["pdf"])
 
 if archivo_pdf:
     raw_data = []
+    # Lista de códigos que identifican pagos/abonos
     codigos_abonos = ["VISAD", "MASTED", "CXC", "VISA", "MASTER", "EFE", "AMEX", "COBR", "PAGO"]
     
     with pdfplumber.open(archivo_pdf) as pdf_read:
@@ -121,14 +116,13 @@ if archivo_pdf:
                         monto_val = float(montos[0].replace(',', ''))
                         partes = texto_linea.split()
                         codigo = partes[2] if len(partes) > 2 else "SERVICE"
-                        # Aquí formateamos la fecha de una vez al extraer
                         fecha_bonita = formatear_fecha_ingles(partes[0])
                         raw_data.append({"Fecha": fecha_bonita, "Concepto": codigo, "Monto": monto_val})
 
     if raw_data:
         df_temp = pd.DataFrame(raw_data)
         
-        # Limpieza Automática Agresiva (Suma Cero por Concepto)
+        # Limpieza Automática
         df_grouped = df_temp.groupby('Concepto')['Monto'].sum().reset_index()
         conceptos_a_borrar = df_grouped[abs(df_grouped['Monto']) < 0.01]['Concepto'].tolist()
         df_clean = df_temp[~df_temp['Concepto'].isin(conceptos_a_borrar)].copy()
@@ -144,7 +138,12 @@ if archivo_pdf:
             if not gemelo.empty:
                 indices_borrados.extend([idx, gemelo.index[0]])
             else:
-                es_pago = any(abono in row['Concepto'] for abono in codigos_abonos) or row['Monto'] < 0
+                # NUEVA LÓGICA: Si empieza con 'AJU', es pago. Si está en la lista de abonos, es pago.
+                es_ajuste = row['Concepto'].startswith("AJU")
+                es_pago_lista = any(abono in row['Concepto'] for abono in codigos_abonos)
+                
+                es_pago = es_ajuste or es_pago_lista or row['Monto'] < 0
+                
                 final_list.append({
                     "Fecha": row['Fecha'],
                     "Concepto": DICCIONARIO_CONCEPTOS.get(row['Concepto'], row['Concepto']),
@@ -156,9 +155,9 @@ if archivo_pdf:
         df_final = pd.DataFrame(final_list)
         st.subheader(f"Resumen para: {f_name}")
         
-        # Editor interactivo por si necesitas borrar algo más
         edited_df = st.data_editor(df_final, num_rows="dynamic", use_container_width=True)
         
+        # El total solo suma los cargos (lo que el cliente consumió)
         df_cargos = edited_df[edited_df["Type"] == "CHARGE"]
         t_mxn, t_usd = df_cargos["Monto MXN"].sum(), df_cargos["Equivalente USD"].sum()
 
