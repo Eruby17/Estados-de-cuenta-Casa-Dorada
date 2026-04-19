@@ -41,15 +41,18 @@ def crear_pdf_recibo(df, tc, total_mxn, total_usd, guest, room, folio):
     pdf = FPDF()
     pdf.add_page()
     
+    # Logo
     if os.path.exists("logo.png"):
         pdf.image("logo.png", 10, 10, 85)
         pdf.ln(35)
     else:
         pdf.set_font("Arial", "B", 20); pdf.cell(0, 10, "CASA DORADA RESORT & SPA", ln=True); pdf.ln(15)
 
+    # Info Hotel
     pdf.set_font("Arial", "", 9); pdf.set_xy(120, 12)
     pdf.multi_cell(80, 4, "Cabo San Lucas, B.C.S., Mexico\nPhone: +52 (624) 163 5700\nwww.casadorada.com", align="R")
     
+    # Datos Huésped
     pdf.set_xy(10, 55); pdf.set_font("Arial", "B", 10)
     pdf.cell(15, 6, "Guest:", 0, 0); pdf.set_font("Arial", "", 10); pdf.cell(90, 6, guest.upper(), 0, 1)
     pdf.set_font("Arial", "B", 10); pdf.cell(15, 6, "Room:", 0, 0); pdf.set_font("Arial", "", 10); pdf.cell(30, 6, str(room), 0, 0)
@@ -59,6 +62,7 @@ def crear_pdf_recibo(df, tc, total_mxn, total_usd, guest, room, folio):
     pdf.set_font("Arial", "", 10); pdf.cell(0, 5, f"Applied Rate: $1.00 USD = {tc} MXN", ln=True, align="C")
     pdf.ln(8)
     
+    # Tabla
     pdf.set_fill_color(33, 47, 61); pdf.set_text_color(255, 255, 255); pdf.set_font("Arial", "B", 9)
     pdf.cell(30, 9, " DATE", 1, 0, "L", True)
     pdf.cell(80, 9, " DESCRIPTION", 1, 0, "L", True)
@@ -78,9 +82,10 @@ def crear_pdf_recibo(df, tc, total_mxn, total_usd, guest, room, folio):
         pdf.cell(40, 8, f"$ {abs(row['Monto MXN']):,.2f} ", 1, 0, "R", fill)
         pdf.cell(40, 8, f"$ {abs(row['Equivalente USD']):,.2f} ", 1, 1, "R", fill)
     
+    # Totales (Basados en Abonos/Payments)
     pdf.ln(8); pdf.set_text_color(0, 0, 0); pdf.set_font("Arial", "B", 12)
-    pdf.cell(110, 10, "", 0, 0); pdf.cell(40, 10, "TOTAL BILL (MXN):", 0, 0, "R"); pdf.cell(40, 10, f"$ {total_mxn:,.2f}", 1, 1, "R")
-    pdf.set_fill_color(240, 240, 240); pdf.cell(110, 12, "", 0, 0); pdf.cell(40, 12, "TOTAL BILL (USD):", 0, 0, "R"); pdf.cell(40, 12, f"$ {total_usd:,.2f}", 1, 1, "R", True)
+    pdf.cell(110, 10, "", 0, 0); pdf.cell(40, 10, "TOTAL PAID (MXN):", 0, 0, "R"); pdf.cell(40, 10, f"$ {total_mxn:,.2f}", 1, 1, "R")
+    pdf.set_fill_color(240, 240, 240); pdf.cell(110, 12, "", 0, 0); pdf.cell(40, 12, "TOTAL PAID (USD):", 0, 0, "R"); pdf.cell(40, 12, f"$ {total_usd:,.2f}", 1, 1, "R", True)
     
     return bytes(pdf.output())
 
@@ -90,8 +95,7 @@ archivo_pdf = st.file_uploader("Subir Estado de Cuenta (PDF)", type=["pdf"])
 
 if archivo_pdf:
     raw_data = []
-    # Lista de códigos que identifican pagos/abonos
-    codigos_abonos = ["VISAD", "MASTED", "CXC", "VISA", "MASTER", "EFE", "AMEX", "COBR", "PAGO"]
+    codigos_abonos_fijos = ["VISAD", "MASTED", "CXC", "VISA", "MASTER", "EFE", "AMEX", "COBR", "PAGO"]
     
     with pdfplumber.open(archivo_pdf) as pdf_read:
         texto_cabecera = pdf_read.pages[0].extract_text()
@@ -122,7 +126,7 @@ if archivo_pdf:
     if raw_data:
         df_temp = pd.DataFrame(raw_data)
         
-        # Limpieza Automática
+        # Limpieza de contracargos/correcciones idénticas
         df_grouped = df_temp.groupby('Concepto')['Monto'].sum().reset_index()
         conceptos_a_borrar = df_grouped[abs(df_grouped['Monto']) < 0.01]['Concepto'].tolist()
         df_clean = df_temp[~df_temp['Concepto'].isin(conceptos_a_borrar)].copy()
@@ -138,10 +142,9 @@ if archivo_pdf:
             if not gemelo.empty:
                 indices_borrados.extend([idx, gemelo.index[0]])
             else:
-                # NUEVA LÓGICA: Si empieza con 'AJU', es pago. Si está en la lista de abonos, es pago.
+                # REGLA: Si empieza con 'AJU' O está en la lista de abonos O el monto es negativo -> Es PAYMENT
                 es_ajuste = row['Concepto'].startswith("AJU")
-                es_pago_lista = any(abono in row['Concepto'] for abono in codigos_abonos)
-                
+                es_pago_lista = any(abono in row['Concepto'] for abono in codigos_abonos_fijos)
                 es_pago = es_ajuste or es_pago_lista or row['Monto'] < 0
                 
                 final_list.append({
@@ -155,11 +158,14 @@ if archivo_pdf:
         df_final = pd.DataFrame(final_list)
         st.subheader(f"Resumen para: {f_name}")
         
+        # Editor interactivo
         edited_df = st.data_editor(df_final, num_rows="dynamic", use_container_width=True)
         
-        # El total solo suma los cargos (lo que el cliente consumió)
-        df_cargos = edited_df[edited_df["Type"] == "CHARGE"]
-        t_mxn, t_usd = df_cargos["Monto MXN"].sum(), df_cargos["Equivalente USD"].sum()
+        # CAMBIO CLAVE: El total ahora suma los "PAYMENT" (Abonos y Ajustes)
+        df_abonos = edited_df[edited_df["Type"] == "PAYMENT"]
+        # Usamos abs() porque contablemente los abonos pueden venir como negativos en el PDF original
+        t_mxn = abs(df_abonos["Monto MXN"].sum())
+        t_usd = abs(df_abonos["Equivalente USD"].sum())
 
         if st.button(" Generar PDF Final"):
             pdf_bytes = crear_pdf_recibo(edited_df, tipo_cambio, t_mxn, t_usd, f_name, f_hab, f_folio)
