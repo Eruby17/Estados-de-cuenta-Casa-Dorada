@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import pdfplumber
 import re
-import io
 import os
 from fpdf import FPDF
 from datetime import datetime
@@ -20,26 +19,19 @@ DICCIONARIO_CONCEPTOS = {
     "MASSPA": "MASSAGE / SPA SERVICE",
     "VISAD": "VISA CARD PAYMENT",
     "MASTED": "MASTER CARD PAYMENT",
-    "RESCRE": "RESORT CREDIT"  # <--- Nuevo código añadido
+    "RESCRE": "RESORT CREDIT",
+    "CXC": "RESORT CREDIT (CXC)" # <--- Clasificado como Resort Credit
 }
 
 st.set_page_config(page_title="Casa Dorada - Folio USD", layout="wide")
-
-st.sidebar.header("⚙️ Configuración")
 tipo_cambio = st.sidebar.number_input("Tipo de Cambio (1 USD = ? MXN)", min_value=1.0, value=16.00, step=0.01)
 
-def formatear_fecha_ingles(fecha_str):
-    try:
-        fecha_obj = datetime.strptime(fecha_str, '%Y%m%d')
-        return fecha_obj.strftime('%b %d, %Y')
-    except:
-        return fecha_str 
-
 # --- 2. FUNCIÓN GENERADORA DE PDF ---
-def crear_pdf_recibo(df, tc, total_mxn, total_usd, guest, room, folio):
+def crear_pdf_recibo(df, tc, stats, guest, room, folio):
     pdf = FPDF()
     pdf.add_page()
     
+    # Logo e Info Hotel
     if os.path.exists("logo.png"):
         pdf.image("logo.png", 10, 10, 85)
         pdf.ln(35)
@@ -49,52 +41,68 @@ def crear_pdf_recibo(df, tc, total_mxn, total_usd, guest, room, folio):
     pdf.set_font("Arial", "", 9); pdf.set_xy(120, 12)
     pdf.multi_cell(80, 4, "Cabo San Lucas, B.C.S., Mexico\nPhone: +52 (624) 163 5700\nwww.casadorada.com", align="R")
     
+    # Datos Huésped
     pdf.set_xy(10, 55); pdf.set_font("Arial", "B", 10)
     pdf.cell(15, 6, "Guest:", 0, 0); pdf.set_font("Arial", "", 10); pdf.cell(90, 6, guest.upper(), 0, 1)
     pdf.set_font("Arial", "B", 10); pdf.cell(15, 6, "Room:", 0, 0); pdf.set_font("Arial", "", 10); pdf.cell(30, 6, str(room), 0, 0)
     pdf.set_font("Arial", "B", 10); pdf.cell(15, 6, "Folio:", 0, 0); pdf.set_font("Arial", "", 10); pdf.cell(30, 6, str(folio), 0, 1)
     
-    pdf.ln(8); pdf.set_font("Arial", "B", 14); pdf.cell(0, 10, "GUEST STATEMENT / ESTADO DE CUENTA", ln=True, align="C")
-    pdf.set_font("Arial", "", 10); pdf.cell(0, 5, f"Applied Rate: $1.00 USD = {tc} MXN", ln=True, align="C")
-    pdf.ln(8)
+    pdf.ln(8); pdf.set_font("Arial", "B", 12); pdf.cell(0, 10, "GUEST STATEMENT / ESTADO DE CUENTA", ln=True, align="C")
+    pdf.set_font("Arial", "", 9); pdf.cell(0, 5, f"Applied Rate: $1.00 USD = {tc} MXN", ln=True, align="C")
+    pdf.ln(5)
     
-    # Encabezado Tabla
-    pdf.set_fill_color(33, 47, 61); pdf.set_text_color(255, 255, 255); pdf.set_font("Arial", "B", 9)
-    pdf.cell(30, 9, " DATE", 1, 0, "L", True)
-    pdf.cell(80, 9, " DESCRIPTION", 1, 0, "L", True)
-    pdf.cell(40, 9, " AMOUNT (MXN)", 1, 0, "R", True)
-    pdf.cell(40, 9, " EQUIV. (USD)", 1, 1, "R", True)
+    # Tabla de Movimientos
+    pdf.set_fill_color(33, 47, 61); pdf.set_text_color(255, 255, 255); pdf.set_font("Arial", "B", 8)
+    pdf.cell(25, 8, " DATE", 1, 0, "L", True)
+    pdf.cell(85, 8, " DESCRIPTION", 1, 0, "L", True)
+    pdf.cell(40, 8, " AMOUNT (MXN)", 1, 0, "R", True)
+    pdf.cell(40, 8, " EQUIV. (USD)", 1, 1, "R", True)
     
-    pdf.set_text_color(0, 0, 0); pdf.set_font("Arial", "", 9)
+    pdf.set_text_color(0, 0, 0); pdf.set_font("Arial", "", 8)
     for _, row in df.iterrows():
-        is_credit = row['Type'] == "PAYMENT"
-        if is_credit:
-            pdf.set_fill_color(245, 245, 245); pdf.set_text_color(180, 0, 0) # Rojo oscuro para abonos
-            prefix = "-"
-        else:
-            pdf.set_text_color(0, 0, 0)
-            prefix = ""
+        is_credit = row['Type'] in ["PAYMENT", "RESORT", "ADJUST"]
+        prefix = "-" if is_credit else ""
+        if is_credit: pdf.set_text_color(100, 100, 100)
+        else: pdf.set_text_color(0, 0, 0)
             
-        pdf.cell(30, 8, str(row['Fecha']), 1, 0, "C", is_credit)
-        pdf.cell(80, 8, f" {row['Concepto']}", 1, 0, "L", is_credit)
-        pdf.cell(40, 8, f"{prefix}$ {abs(row['Monto MXN']):,.2f} ", 1, 0, "R", is_credit)
-        pdf.cell(40, 8, f"{prefix}$ {abs(row['Equivalente USD']):,.2f} ", 1, 1, "R", is_credit)
+        pdf.cell(25, 7, str(row['Fecha']), 1, 0, "C")
+        pdf.cell(85, 7, f" {row['Concepto']}", 1, 0, "L")
+        pdf.cell(40, 7, f"{prefix}$ {abs(row['Monto MXN']):,.2f} ", 1, 0, "R")
+        pdf.cell(40, 7, f"{prefix}$ {abs(row['Equivalente USD']):,.2f} ", 1, 1, "R")
     
-    # Totales basados en CREDITOS
-    pdf.ln(8); pdf.set_text_color(0, 0, 0); pdf.set_font("Arial", "B", 12)
-    pdf.cell(110, 10, "", 0, 0); pdf.cell(40, 10, "TOTAL CREDITS (MXN):", 0, 0, "R"); pdf.cell(40, 10, f"$ {total_mxn:,.2f}", 1, 1, "R")
-    pdf.set_fill_color(230, 240, 250); pdf.cell(110, 12, "", 0, 0); pdf.cell(40, 12, "TOTAL CREDITS (USD):", 0, 0, "R"); pdf.cell(40, 12, f"$ {total_usd:,.2f}", 1, 1, "R", True)
+    # --- SECCIÓN DE TOTALES DESGLOSADOS ---
+    pdf.ln(5)
+    pdf.set_font("Arial", "", 9)
+    
+    def agregar_linea_total(etiqueta, valor_mxn, valor_usd, neg=False):
+        p = "-" if neg and valor_mxn > 0 else ""
+        pdf.cell(110, 6, "", 0, 0)
+        pdf.cell(40, 6, etiqueta, 0, 0, "R")
+        pdf.cell(40, 6, f"{p}$ {valor_usd:,.2f}", 1, 1, "R")
+
+    agregar_linea_total("Total Charges (USD):", stats['charges_mxn'], stats['charges_usd'])
+    agregar_linea_total("Payments (USD):", stats['payments_mxn'], stats['payments_usd'], neg=True)
+    agregar_linea_total("Resort Credits Applied (USD):", stats['resort_mxn'], stats['resort_usd'], neg=True)
+    agregar_linea_total("Adjustments (USD):", stats['adjust_mxn'], stats['adjust_usd'], neg=True)
+    
+    pdf.ln(2)
+    pdf.set_fill_color(240, 240, 240); pdf.set_font("Arial", "B", 11)
+    pdf.cell(110, 8, "", 0, 0)
+    pdf.cell(40, 8, "BALANCE DUE (USD):", 0, 0, "R")
+    # El balance final se muestra sin signo negativo si es 0 o cercano
+    val_final = stats['balance_usd'] if abs(stats['balance_usd']) > 0.01 else 0.00
+    pdf.cell(40, 8, f"$ {val_final:,.2f}", 1, 1, "R", True)
     
     return bytes(pdf.output())
 
 # --- 3. PROCESAMIENTO ---
-st.title("🏨 Generador de Estados de Cuenta")
+st.title("🏨 Generador de Folios Casa Dorada")
 archivo_pdf = st.file_uploader("Subir Estado de Cuenta (PDF)", type=["pdf"])
 
 if archivo_pdf:
     raw_data = []
-    # Lista extendida de abonos
-    codigos_abonos_fijos = ["VISAD", "MASTED", "CXC", "VISA", "MASTER", "EFE", "AMEX", "COBR", "PAGO", "RESCRE"]
+    # CXC se quita de aquí porque ahora tiene su categoría especial
+    codigos_pagos = ["VISAD", "MASTED", "VISA", "MASTER", "EFE", "AMEX", "COBR", "PAGO"]
     
     with pdfplumber.open(archivo_pdf) as pdf_read:
         texto_cabecera = pdf_read.pages[0].extract_text()
@@ -113,63 +121,53 @@ if archivo_pdf:
             
             for top in sorted(lineas_dict.keys()):
                 texto_linea = " ".join([p['text'] for p in lineas_dict[top]])
-                if re.match(r'^\d{8}', texto_linea.strip()) and "SALDO" not in texto_linea.upper():
+                if re.match(r'^\d{8}', texto_linea.strip()):
                     montos = re.findall(r'(-?\d[\d,]*\.\d{2})', texto_linea)
                     if montos:
-                        monto_val = float(montos[0].replace(',', ''))
                         partes = texto_linea.split()
-                        codigo = partes[2] if len(partes) > 2 else "SERVICE"
-                        fecha_bonita = formatear_fecha_ingles(partes[0])
-                        raw_data.append({"Fecha": fecha_bonita, "Concepto": codigo, "Monto": monto_val})
+                        raw_data.append({
+                            "Fecha": datetime.strptime(partes[0], '%Y%m%d').strftime('%b %d, %Y'),
+                            "Cod": partes[2],
+                            "Monto": float(montos[0].replace(',', ''))
+                        })
 
     if raw_data:
-        df_temp = pd.DataFrame(raw_data)
-        
-        # Agrupar y limpiar conceptos que se cancelan entre sí
-        df_grouped = df_temp.groupby('Concepto')['Monto'].sum().reset_index()
-        conceptos_a_borrar = df_grouped[abs(df_grouped['Monto']) < 0.01]['Concepto'].tolist()
-        df_clean = df_temp[~df_temp['Concepto'].isin(conceptos_a_borrar)].copy()
-        
         final_list = []
-        indices_borrados = []
-        for idx, row in df_clean.iterrows():
-            if idx in indices_borrados: continue
-            gemelo = df_clean[(abs(df_clean['Monto'] + row['Monto']) < 0.01) & 
-                              (df_clean['Concepto'] == row['Concepto']) & 
-                              (~df_clean.index.isin(indices_borrados)) & 
-                              (df_clean.index != idx)].head(1)
-            if not gemelo.empty:
-                indices_borrados.extend([idx, gemelo.index[0]])
-            else:
-                # Lógica de identificación
-                es_ajuste = row['Concepto'].startswith("AJU")
-                es_pago_lista = any(abono in row['Concepto'] for abono in codigos_abonos_fijos)
-                es_pago = es_ajuste or es_pago_lista or row['Monto'] < 0
-                
-                # Definir nombre visual
-                if es_ajuste:
-                    nombre_concepto = f"ADJUSTMENT ({row['Concepto']})"
-                else:
-                    nombre_concepto = DICCIONARIO_CONCEPTOS.get(row['Concepto'], row['Concepto'])
+        for r in raw_data:
+            # CLASIFICACIÓN LOGICA
+            if r['Cod'] in ["RESCRE", "CXC"]: tipo = "RESORT" # <--- CXC añadido aquí
+            elif r['Cod'].startswith("AJU"): tipo = "ADJUST"
+            elif any(p in r['Cod'] for p in codigos_pagos) or r['Monto'] < 0: tipo = "PAYMENT"
+            else: tipo = "CHARGE"
+            
+            # Nombre visual
+            if tipo == "ADJUST": desc = f"ADJUSTMENT ({r['Cod']})"
+            else: desc = DICCIONARIO_CONCEPTOS.get(r['Cod'], r['Cod'])
 
-                final_list.append({
-                    "Fecha": row['Fecha'],
-                    "Concepto": nombre_concepto,
-                    "Type": "PAYMENT" if es_pago else "CHARGE",
-                    "Monto MXN": row['Monto'],
-                    "Equivalente USD": round(row['Monto'] / tipo_cambio, 2)
-                })
+            final_list.append({
+                "Fecha": r['Fecha'], "Concepto": desc, "Type": tipo,
+                "Monto MXN": r['Monto'], "Equivalente USD": round(r['Monto'] / tipo_cambio, 2)
+            })
 
         df_final = pd.DataFrame(final_list)
-        st.subheader(f"Resumen para: {f_name}")
-        
         edited_df = st.data_editor(df_final, num_rows="dynamic", use_container_width=True)
         
-        # Calcular totales sobre los CREDITS (Abonos, Ajustes y Resort Credit)
-        df_creditos = edited_df[edited_df["Type"] == "PAYMENT"]
-        t_mxn = abs(df_creditos["Monto MXN"].sum())
-        t_usd = abs(df_creditos["Equivalente USD"].sum())
+        # CÁLCULOS
+        def get_sum(t, col): return edited_df[edited_df['Type']==t][col].sum()
 
-        if st.button(" Generar PDF Final"):
-            pdf_bytes = crear_pdf_recibo(edited_df, tipo_cambio, t_mxn, t_usd, f_name, f_hab, f_folio)
-            st.download_button("📥 Descargar PDF", data=pdf_bytes, file_name=f"Folio_{f_folio}.pdf")
+        s = {
+            'charges_mxn': get_sum("CHARGE", "Monto MXN"),
+            'charges_usd': get_sum("CHARGE", "Equivalente USD"),
+            'payments_mxn': abs(get_sum("PAYMENT", "Monto MXN")),
+            'payments_usd': abs(get_sum("PAYMENT", "Equivalente USD")),
+            'resort_mxn': abs(get_sum("RESORT", "Monto MXN")),
+            'resort_usd': abs(get_sum("RESORT", "Equivalente USD")),
+            'adjust_mxn': abs(get_sum("ADJUST", "Monto MXN")),
+            'adjust_usd': abs(get_sum("ADJUST", "Equivalente USD")),
+        }
+        s['balance_mxn'] = s['charges_mxn'] - (s['payments_mxn'] + s['resort_mxn'] + s['adjust_mxn'])
+        s['balance_usd'] = s['charges_usd'] - (s['payments_usd'] + s['resort_usd'] + s['adjust_usd'])
+
+        if st.button("Generar PDF Final"):
+            pdf_b = crear_pdf_recibo(edited_df, tipo_cambio, s, f_name, f_hab, f_folio)
+            st.download_button("📥 Descargar", data=pdf_b, file_name=f"Folio_{f_folio}.pdf")
