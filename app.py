@@ -82,9 +82,8 @@ def crear_pdf_recibo(df, tc, stats, guest, room, folio):
         pdf.cell(40, 8, f"{prefix}$ {abs(row['Monto MXN']):,.2f} ", 1, 0, "R")
         pdf.cell(40, 8, f"{prefix}$ {abs(row['Equivalente USD']):,.2f} ", 1, 1, "R")
 
-    # --- SECCIÓN DE TOTALES (Con el orden solicitado) ---
+    # --- SECCIÓN DE TOTALES ---
     pdf.ln(6)
-    # Evitar que los totales se corten entre páginas
     if pdf.get_y() > 220: pdf.add_page()
     
     pdf.set_font("Arial", "", 10)
@@ -125,9 +124,14 @@ if archivo_pdf:
     with pdfplumber.open(archivo_pdf) as pdf_read:
         texto_cabecera = pdf_read.pages[0].extract_text()
         match_h = re.search(r"(.*)\s+Hab:(\d+)\s+Folio:\s*(\d+)", texto_cabecera)
-        f_name = match_h.group(1).strip() if match_h else "N/A"
+        
+        # Extracción inicial
+        f_name_extracted = match_h.group(1).strip() if match_h else "N/A"
         f_hab = match_h.group(2).strip() if match_h else "N/A"
         f_folio = match_h.group(3).strip() if match_h else "N/A"
+
+        # --- CAMPO MANUAL PARA EL NOMBRE ---
+        nombre_huesped = st.text_input("Nombre del Huésped (puedes editarlo):", value=f_name_extracted)
 
         for page in pdf_read.pages:
             table = page.extract_words()
@@ -152,7 +156,6 @@ if archivo_pdf:
     if raw_data:
         final_list = []
         for r in raw_data:
-            # Orden de prioridad en Clasificación
             if r['Cod'].startswith("AJU"):
                 tipo, desc = "ADJUST", f"ADJUSTMENT ({r['Cod']})"
             elif r['Cod'] in ["RESCRE", "CXC"]:
@@ -170,7 +173,6 @@ if archivo_pdf:
         df_final = pd.DataFrame(final_list)
         edited_df = st.data_editor(df_final, num_rows="dynamic", use_container_width=True)
         
-        # Totales
         def s_usd(t): return edited_df[edited_df['Type']==t]['Equivalente USD'].sum()
         
         stats = {
@@ -182,5 +184,6 @@ if archivo_pdf:
         stats['balance_usd'] = stats['charges_usd'] - (stats['adjust_usd'] + stats['resort_usd'] + stats['payments_usd'])
 
         if st.button("Generar PDF Final"):
-            pdf_b = crear_pdf_recibo(edited_df, tipo_cambio, stats, f_name, f_hab, f_folio)
+            # Se usa 'nombre_huesped' (el del input manual) para el PDF
+            pdf_b = crear_pdf_recibo(edited_df, tipo_cambio, stats, nombre_huesped, f_hab, f_folio)
             st.download_button("📥 Descargar Folio", data=pdf_b, file_name=f"Folio_{f_folio}.pdf")
