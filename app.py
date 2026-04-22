@@ -24,7 +24,10 @@ DICCIONARIO_CONCEPTOS = {
 }
 
 st.set_page_config(page_title="Casa Dorada - Folio USD", layout="wide")
+
+# --- PANEL LATERAL ---
 tipo_cambio = st.sidebar.number_input("Tipo de Cambio (1 USD = ? MXN)", min_value=1.0, value=16.00, step=0.01)
+nombre_manual = st.sidebar.text_input("Nombre del Huésped (Manual):", value="")
 
 # --- 2. CLASE PDF OPTIMIZADA ---
 class FolioPDF(FPDF):
@@ -51,7 +54,7 @@ def crear_pdf_recibo(df, tc, stats, guest, room, folio):
     pdf.set_auto_page_break(auto=True, margin=20)
     pdf.add_page()
     
-    # Datos Huésped (Solo en primera página)
+    # Datos Huésped
     pdf.set_font("Arial", "B", 10)
     pdf.cell(15, 6, "Guest:", 0, 0); pdf.set_font("Arial", "", 10); pdf.cell(90, 6, guest.upper(), 0, 1)
     pdf.set_font("Arial", "B", 10); pdf.cell(15, 6, "Room:", 0, 0); pdf.set_font("Arial", "", 10); pdf.cell(30, 6, str(room), 0, 0)
@@ -82,22 +85,29 @@ def crear_pdf_recibo(df, tc, stats, guest, room, folio):
         pdf.cell(40, 8, f"{prefix}$ {abs(row['Monto MXN']):,.2f} ", 1, 0, "R")
         pdf.cell(40, 8, f"{prefix}$ {abs(row['Equivalente USD']):,.2f} ", 1, 1, "R")
 
-    # --- SECCIÓN DE TOTALES ---
+    # --- SECCIÓN DE TOTALES DINÁMICA ---
     pdf.ln(6)
     if pdf.get_y() > 220: pdf.add_page()
     
     pdf.set_font("Arial", "", 10)
-    def fila_total(label, val, neg=False, bold=False):
+    def fila_total(label, val, neg=False):
         p = "-" if neg and val > 0 else ""
-        if bold: pdf.set_font("Arial", "B", 10)
         pdf.cell(110, 7, "", 0, 0)
         pdf.cell(45, 7, label, 0, 0, "R")
         pdf.cell(35, 7, f"{p}$ {val:,.2f}", 1, 1, "R")
-        pdf.set_font("Arial", "", 10)
 
+    # Mostrar Charges siempre
     fila_total("Total Charges:", stats['charges_usd'])
-    fila_total("Adjustments:", stats['adjust_usd'], neg=True)
-    fila_total("Resort Credits / Vivenzia:", stats['resort_usd'], neg=True)
+    
+    # Mostrar Adjustments solo si es mayor a 0
+    if stats['adjust_usd'] > 0:
+        fila_total("Adjustments:", stats['adjust_usd'], neg=True)
+    
+    # Mostrar Resort Credits solo si es mayor a 0
+    if stats['resort_usd'] > 0:
+        fila_total("Resort Credits / Vivenzia:", stats['resort_usd'], neg=True)
+    
+    # Mostrar Payments siempre (o puedes envolverlo en un if si prefieres)
     fila_total("Payments:", stats['payments_usd'], neg=True)
     
     pdf.ln(3)
@@ -125,13 +135,12 @@ if archivo_pdf:
         texto_cabecera = pdf_read.pages[0].extract_text()
         match_h = re.search(r"(.*)\s+Hab:(\d+)\s+Folio:\s*(\d+)", texto_cabecera)
         
-        # Extracción inicial
-        f_name_extracted = match_h.group(1).strip() if match_h else "N/A"
+        f_name_pdf = match_h.group(1).strip() if match_h else "N/A"
         f_hab = match_h.group(2).strip() if match_h else "N/A"
         f_folio = match_h.group(3).strip() if match_h else "N/A"
 
-        # --- CAMPO MANUAL PARA EL NOMBRE ---
-        nombre_huesped = st.text_input("Nombre del Huésped (puedes editarlo):", value=f_name_extracted)
+        # Definir nombre: Prioridad Manual > PDF
+        nombre_final = nombre_manual if nombre_manual.strip() != "" else f_name_pdf
 
         for page in pdf_read.pages:
             table = page.extract_words()
@@ -184,6 +193,5 @@ if archivo_pdf:
         stats['balance_usd'] = stats['charges_usd'] - (stats['adjust_usd'] + stats['resort_usd'] + stats['payments_usd'])
 
         if st.button("Generar PDF Final"):
-            # Se usa 'nombre_huesped' (el del input manual) para el PDF
-            pdf_b = crear_pdf_recibo(edited_df, tipo_cambio, stats, nombre_huesped, f_hab, f_folio)
+            pdf_b = crear_pdf_recibo(edited_df, tipo_cambio, stats, nombre_final, f_hab, f_folio)
             st.download_button("📥 Descargar Folio", data=pdf_b, file_name=f"Folio_{f_folio}.pdf")
