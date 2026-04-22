@@ -20,7 +20,11 @@ DICCIONARIO_CONCEPTOS = {
     "VISAD": "VISA CARD PAYMENT",
     "MASTED": "MASTER CARD PAYMENT",
     "RESCRE": "RESORT CREDIT",
-    "CXC": "CUPON VIVENZIA"
+    "CXC": "CUPON VIVENZIA",
+    "RENHAB": "DAILY ROOM RATE",
+    "DEPOS": "RESERVATION DEPOSIT",
+    "UTC": "EXCHANGE RATE DIFFERENCE",
+    "PCAM": "FOREIGN EXCHANGE ADJUSTMENT"
 }
 
 st.set_page_config(page_title="Casa Dorada - Folio USD", layout="wide")
@@ -96,18 +100,14 @@ def crear_pdf_recibo(df, tc, stats, guest, room, folio):
         pdf.cell(45, 7, label, 0, 0, "R")
         pdf.cell(35, 7, f"{p}$ {val:,.2f}", 1, 1, "R")
 
-    # Mostrar Charges siempre
     fila_total("Total Charges:", stats['charges_usd'])
     
-    # Mostrar Adjustments solo si es mayor a 0
     if stats['adjust_usd'] > 0:
         fila_total("Adjustments:", stats['adjust_usd'], neg=True)
     
-    # Mostrar Resort Credits solo si es mayor a 0
     if stats['resort_usd'] > 0:
         fila_total("Resort Credits / Vivenzia:", stats['resort_usd'], neg=True)
     
-    # Mostrar Payments siempre (o puedes envolverlo en un if si prefieres)
     fila_total("Payments:", stats['payments_usd'], neg=True)
     
     pdf.ln(3)
@@ -129,7 +129,7 @@ archivo_pdf = st.file_uploader("Subir PDF Original", type=["pdf"])
 
 if archivo_pdf:
     raw_data = []
-    codigos_pagos = ["VISAD", "MASTED", "VISA", "MASTER", "EFE", "AMEX", "COBR", "PAGO"]
+    codigos_pagos = ["VISAD", "MASTED", "VISA", "MASTER", "EFE", "AMEX", "COBR", "PAGO", "DEPOS"]
     
     with pdfplumber.open(archivo_pdf) as pdf_read:
         texto_cabecera = pdf_read.pages[0].extract_text()
@@ -139,7 +139,6 @@ if archivo_pdf:
         f_hab = match_h.group(2).strip() if match_h else "N/A"
         f_folio = match_h.group(3).strip() if match_h else "N/A"
 
-        # Definir nombre: Prioridad Manual > PDF
         nombre_final = nombre_manual if nombre_manual.strip() != "" else f_name_pdf
 
         for page in pdf_read.pages:
@@ -159,16 +158,16 @@ if archivo_pdf:
                             "Fecha": datetime.strptime(partes[0], '%Y%m%d').strftime('%b %d, %Y'),
                             "Cod": partes[2],
                             "Monto": float(m[0].replace(',', '')),
-                            "EsVivenzia": "VIVENZIA" in txt.upper()
                         })
 
     if raw_data:
         final_list = []
         for r in raw_data:
-            if r['Cod'].startswith("AJU"):
-                tipo, desc = "ADJUST", f"ADJUSTMENT ({r['Cod']})"
+            # LÓGICA DE CLASIFICACIÓN ACTUALIZADA
+            if r['Cod'].startswith("AJU") or r['Cod'] == "PCAM":
+                tipo, desc = "ADJUST", DICCIONARIO_CONCEPTOS.get(r['Cod'], f"ADJUSTMENT ({r['Cod']})")
             elif r['Cod'] in ["RESCRE", "CXC"]:
-                tipo, desc = "RESORT", "CUPON VIVENZIA"
+                tipo, desc = "RESORT", DICCIONARIO_CONCEPTOS.get(r['Cod'], r['Cod'])
             elif any(p in r['Cod'] for p in codigos_pagos) or r['Monto'] < 0:
                 tipo, desc = "PAYMENT", DICCIONARIO_CONCEPTOS.get(r['Cod'], r['Cod'])
             else:
