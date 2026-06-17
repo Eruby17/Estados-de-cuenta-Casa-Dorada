@@ -80,46 +80,29 @@ def crear_pdf_recibo(df, tc, stats, guest, room, folio):
     
     for _, row in df.iterrows():
         is_neg = row['Type'] != "CHARGE"
-        prefix = "-" if is_neg else ""
-        if is_neg: pdf.set_text_color(110, 110, 110)
-        else: pdf.set_text_color(0, 0, 0)
+        # Cambiado: Ya no se asigna el prefijo "-" a los renglones que no son CHARGE
+        if is_neg: 
+            pdf.set_text_color(110, 110, 110) # Mantiene el color gris para diferenciarlo
+        else: 
+            pdf.set_text_color(0, 0, 0)
             
         pdf.cell(30, 8, str(row['Fecha']), 1, 0, "C")
         pdf.cell(80, 8, f" {row['Concepto']}", 1, 0, "L")
-        pdf.cell(40, 8, f"{prefix}$ {abs(row['Monto MXN']):,.2f} ", 1, 0, "R")
-        pdf.cell(40, 8, f"{prefix}$ {abs(row['Equivalente USD']):,.2f} ", 1, 1, "R")
+        pdf.cell(40, 8, f"$ {abs(row['Monto MXN']):,.2f} ", 1, 0, "R")
+        pdf.cell(40, 8, f"$ {abs(row['Equivalente USD']):,.2f} ", 1, 1, "R")
 
     # --- SECCIÓN DE TOTALES DINÁMICA ---
     pdf.ln(6)
     if pdf.get_y() > 220: pdf.add_page()
     
     pdf.set_font("Arial", "", 10)
-    def fila_total(label, val, neg=False):
-        p = "-" if neg and val > 0 else ""
+    def fila_total(label, val):
         pdf.cell(110, 7, "", 0, 0)
         pdf.cell(45, 7, label, 0, 0, "R")
-        pdf.cell(35, 7, f"{p}$ {val:,.2f}", 1, 1, "R")
+        pdf.cell(35, 7, f"$ {val:,.2f}", 1, 1, "R")
 
+    # Modificado: Solo se imprime el total de cargos y se quitaron las condicionales del balance final
     fila_total("Total Charges:", stats['charges_usd'])
-    
-    if stats['adjust_usd'] > 0:
-        fila_total("Adjustments:", stats['adjust_usd'], neg=True)
-    
-    if stats['resort_usd'] > 0:
-        fila_total("Resort Credits / Vivenzia:", stats['resort_usd'], neg=True)
-    
-    fila_total("Payments:", stats['payments_usd'], neg=True)
-    
-    pdf.ln(3)
-    if abs(stats['balance_usd']) < 0.01:
-        pdf.set_fill_color(230, 245, 230); pdf.set_font("Arial", "B", 11)
-        pdf.cell(110, 10, "", 0, 0)
-        pdf.cell(80, 12, "ACCOUNT SETTLED", 1, 1, "C", True)
-    else:
-        pdf.set_fill_color(255, 230, 230); pdf.set_font("Arial", "B", 11)
-        pdf.cell(110, 10, "", 0, 0)
-        pdf.cell(45, 10, "BALANCE DUE (USD):", 0, 0, "R")
-        pdf.cell(35, 10, f"$ {stats['balance_usd']:,.2f}", 1, 1, "R", True)
     
     return bytes(pdf.output())
 
@@ -163,7 +146,6 @@ if archivo_pdf:
     if raw_data:
         final_list = []
         for r in raw_data:
-            # LÓGICA DE CLASIFICACIÓN ACTUALIZADA
             if r['Cod'].startswith("AJU") or r['Cod'] == "PCAM":
                 tipo, desc = "ADJUST", DICCIONARIO_CONCEPTOS.get(r['Cod'], f"ADJUSTMENT ({r['Cod']})")
             elif r['Cod'] in ["RESCRE", "CXC"]:
